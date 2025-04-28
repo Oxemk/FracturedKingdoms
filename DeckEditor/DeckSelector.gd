@@ -1,87 +1,76 @@
-# res://Scenes/DeckEditor/DeckEditor.gd
 extends Control
 
 
-@onready var deck_info_label: Label   = $DeckInfoLabel
-@onready var card_grid: GridContainer = $VBoxContainer/CardGrid
-@onready var card_pool: VBoxContainer = $VBoxContainer2/CardPoolScroll/CardPool
-@onready var save_button: Button      = $HBoxContainer/save
+const MAX_DECKS = 10
+const NEW_DECK_POPUP_PATH := "res://Scenes/DeckEditor/NewDeckPopup.tscn"
 
-var current_deck: Dictionary = {}
-var card_data: Dictionary = {}
-var collection_manager: Node
+@onready var deck_list: ItemList = $VBoxContainer/DeckList2
+@onready var new_deck_button: Button = $VBoxContainer/HBoxContainer/NewDeckButton
+@onready var edit_button: Button = $VBoxContainer/HBoxContainer/Edit
+@onready var delete_button: Button = $VBoxContainer/HBoxContainer/Delete
+@onready var back: Button = $VBoxContainer/HBoxContainer/back
 
-# Preload the CardDatabase script
-var CardDatabase = preload("res://managers/CardDatabase.gd")
+var deck_data: Array = []
+var selected_index := -1
 
-func _ready() -> void:
-	print("--- DeckEditor ready ---")
+func _ready():
+	load_decks()
+	display_decks()
+	_check_button_states()
+	new_deck_button.pressed.connect(_on_new_deck)
+	edit_button.pressed.connect(_on_edit_deck)
+	delete_button.pressed.connect(_on_delete_deck)
+	deck_list.item_selected.connect(_on_list_select)
+	back.pressed.connect(_on_back)
 
-	# Ensure a deck has been selected
-	if not Globals.selected_deck or not Globals.selected_deck.has("cards"):
-		push_error("DeckEditor: No valid deck selected in Globals.selected_deck!")
-		return
-	current_deck = Globals.selected_deck
+func _check_button_states() -> void:
+	new_deck_button.disabled = deck_data.size() >= MAX_DECKS
+	edit_button.disabled = selected_index < 0
+	delete_button.disabled = selected_index < 0
 
-	# Load all cards from the database
-	card_data = CardDatabase.get_all_cards()
-	print_debug("Total cards in database: %d" % card_data.size())
+func load_decks() -> void:
+	var data = DataUtils.load_data("user://decks.json")
+	deck_data = data if typeof(data) == TYPE_ARRAY else []
 
-	# Instantiate and add the collection manager
-	collection_manager = preload("res://managers/CardCollectionManager.gd").new()
-	add_child(collection_manager)
-	# For testing, force unlock all cards; later use Globals.is_offline
-	collection_manager.unlock_all_cards = true
 
-	# Connect save button
-	save_button.pressed.connect(_on_save)
+func save_decks() -> void:
+	DataUtils.save_data("user://decks.json", deck_data)
 
-	# Populate UI
-	display_deck()
-	load_card_pool()
+func display_decks() -> void:
+	deck_list.clear()
+	for deck in deck_data:
+		var name = deck.get("name", "Unnamed Deck")
+		var mode = deck.get("mode", "Unknown")
+		deck_list.add_item("%s (%s)" % [name, mode])
+	selected_index = -1
+	_check_button_states()
 
-func display_deck() -> void:
-	# Update deck info label
-	var deck_name = current_deck.get("name", "Unnamed Deck")
-	var mode = current_deck.get("mode", "Unknown")
-	deck_info_label.text = "Editing Deck: %s [%s]" % [deck_name, mode]
+func _on_list_select(index: int) -> void:
+	selected_index = index
+	_check_button_states()
 
-	clear_children(card_grid)
-	# Add a label for each card in the deck
-	for cid in current_deck.get("cards", []):
-		var data = card_data.get(cid)
-		var text = data.get("name", cid) if data and data.has("name") else cid
-		var lbl = Label.new()
-		lbl.text = text
-		card_grid.add_child(lbl)
+func _on_new_deck() -> void:
+	var popup = load(NEW_DECK_POPUP_PATH).instantiate()
+	popup.parent_selector = self
+	popup.is_edit_mode = false
+	add_child(popup)
+	popup.popup_centered()
 
-func load_card_pool() -> void:
-	var coll = collection_manager.get_collection()
-	print_debug("load_card_pool(): found %d cards" % coll.size())
+func _on_edit_deck() -> void:
+	if selected_index >= 0 and selected_index < deck_data.size():
+		var popup = load(NEW_DECK_POPUP_PATH).instantiate()
+		popup.parent_selector = self
+		popup.is_edit_mode = true
+		popup.edit_index = selected_index
+		popup.populate_with_deck(deck_data[selected_index])
+		add_child(popup)
+		popup.popup_centered()
 
-	clear_children(card_pool)
-	for cid in coll.keys():
-		var data = card_data.get(cid)
-		var btn_text = data.get("name", cid) if data and data.has("name") else cid
-		var btn = Button.new()
-		btn.text = btn_text
-		btn.pressed.connect(_on_card_selected.bind(cid))
-		card_pool.add_child(btn)
+func _on_delete_deck() -> void:
+	if selected_index >= 0:
+		deck_data.remove_at(selected_index)
+		save_decks()
+		display_decks()
 
-func _on_card_selected(cid: String) -> void:
-	var cards = current_deck.get("cards", [])
-	var limit = int(current_deck.get("card_limit", cards.size() + 1))
-	if cards.size() < limit:
-		cards.append(cid)
-		current_deck["cards"] = cards
-		display_deck()
-	else:
-		print_debug("Reached card limit of %d" % limit)
-
-func _on_save() -> void:
-	DeckManager.create_deck(current_deck)
-	get_tree().change_scene_to_file("res://Scenes/DeckEditor/DeckSelector.tscn")
-
-func clear_children(node: Node) -> void:
-	for child in node.get_children():
-		child.queue_free()
+func _on_back() -> void:
+	get_tree().change_scene_to_file("res://Scenes/MainMenu/MainMenu.tscn")
